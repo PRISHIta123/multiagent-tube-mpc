@@ -1,0 +1,6 @@
+gym
+numpy
+torch
+matplotlib
+cvxpy
+casadi
