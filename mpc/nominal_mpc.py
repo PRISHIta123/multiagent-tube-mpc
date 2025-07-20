@@ -1,26 +1,65 @@
-import numpy as np
-import cvxpy as cp
+import casadi as ca
 
-def solve_nominal_mpc(model, x0, target_traj, horizon, Q, R, Qf, u_bounds, x_bounds):
-    nx = x0.shape[0]
-    nu = u_bounds.shape[1]
+def solve_nominal_mpc(x0, target_traj, T=10):
+    target_traj = target_traj.T
 
-    x = cp.Variable((horizon + 1, nx))
-    u = cp.Variable((horizon, nu))
+    nx = 3  # state dimension
+    nu = 2  # control dimension
+
+    # MPC weights
+    Q = ca.diagcat(10, 10, 1)  # position, position, heading
+    R = ca.diagcat(1, 1)       # control effort
+
+    # Optimization variables
+    opti = ca.Opti()
+    X = opti.variable(nx, T + 1)  # state trajectory
+    U = opti.variable(nu, T)      # control trajectory
+
+    # Parameters (initial condition and reference)
+    x_init = opti.parameter(nx)
+    ref_traj = opti.parameter(nx, T)
+
+    # Initial condition constraint
+    opti.subject_to(X[:, 0] == x_init)
+
+    # System dynamics (example: unicycle model)
+    dt = 0.1
+    def dynamics(x, u):
+        return ca.vertcat(
+            u[0] * ca.cos(x[2]),
+            u[0] * ca.sin(x[2]),
+            u[1]
+        )
 
     cost = 0
-    constraints = [x[0] == x0]
+    for t in range(T):
+        # dynamics constraints
+        x_next = X[:, t] + dt * dynamics(X[:, t], U[:, t])
+        opti.subject_to(X[:, t + 1] == x_next)
 
-    for t in range(horizon):
-        cost += cp.quad_form(x[t] - target_traj[t], Q) + cp.quad_form(u[t], R)
-        constraints += [x[t + 1] == model(x[t], u[t])]
-        constraints += [x_bounds[0] <= x[t], x[t] <= x_bounds[1]]
-        constraints += [u_bounds[0] <= u[t], u[t] <= u_bounds[1]]
+        # cost terms
+        x_err = ca.reshape(X[:, t] - ref_traj[:, t], (nx, 1))
+        u_t = ca.reshape(U[:, t], (nu, 1))
+        cost += x_err.T @ Q @ x_err + u_t.T @ R @ u_t
 
-    cost += cp.quad_form(x[horizon] - target_traj[horizon], Qf)
-    constraints += [x_bounds[0] <= x[horizon], x[horizon] <= x_bounds[1]]
+    # Terminal cost
+    x_err_terminal = ca.reshape(X[:, T] - ref_traj[:, T - 1], (nx, 1))
+    cost += x_err_terminal.T @ Q @ x_err_terminal
 
-    prob = cp.Problem(cp.Minimize(cost), constraints)
-    prob.solve(solver=cp.OSQP)
+    opti.minimize(cost)
 
-    return u.value, x.value
+    # Solver setup
+    opts = {"ipopt.print_level": 0, "print_time": 0}
+    opti.solver("ipopt", opts)
+
+    # Set parameter values
+    opti.set_value(x_init, x0)
+    opti.set_value(ref_traj, target_traj[:, :T])
+
+    # Solve
+    sol = opti.solve()
+
+    # Extract solution
+    u_nom = sol.value(U)
+    x_nom = sol.value(X)
+    return u_nom, x_nom

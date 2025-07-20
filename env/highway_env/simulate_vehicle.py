@@ -19,10 +19,6 @@ def simulate_single_agent():
 
     return trajectory
 
-import numpy as np
-import matplotlib.pyplot as plt
-from vehicle_models import UnicycleModel
-
 def simulate_multiagent(num_agents=3, timesteps=20):
     # Define shared model (same dynamics for all)
     model = UnicycleModel(dt=0.1)

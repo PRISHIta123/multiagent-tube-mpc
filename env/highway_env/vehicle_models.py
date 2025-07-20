@@ -1,12 +1,21 @@
+from casadi import SX, vertcat, Function
 import numpy as np
 
 class UnicycleModel:
-    """
-    Discrete-time unicycle model for a vehicle.
-    """
     def __init__(self, dt=0.1, wheelbase=0.5):
         self.dt = dt
         self.L = wheelbase  # Wheelbase length
+
+        # Define symbolic dynamics for CasADi
+        x = SX.sym('x', 3)  # [x, y, theta]
+        u = SX.sym('u', 2)  # [v, w]
+
+        x_next = vertcat(
+            x[0] + u[0] * np.cos(x[2]) * self.dt,
+            x[1] + u[0] * np.sin(x[2]) * self.dt,
+            x[2] + u[1] * self.dt
+        )
+        self.f_sym = Function('f', [x, u], [x_next])
 
     def step(self, state, control):
         """
@@ -22,6 +31,9 @@ class UnicycleModel:
         theta_next = theta + omega * self.dt
 
         return np.array([x_next, y_next, theta_next])
+
+    def step_symbolic(self, x, u):
+        return self.f_sym(x, u)
 
     def simulate_trajectory(self, initial_state, control_sequence):
         """

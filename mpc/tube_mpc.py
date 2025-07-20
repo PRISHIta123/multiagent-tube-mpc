@@ -18,7 +18,6 @@ class TubeMPC:
 
         # Solve the nominal MPC problem with tightened constraints
         u_nom_seq, x_nom_seq = solve_nominal_mpc(
-            self.model, x0, target_traj, self.horizon,
-            self.Q, self.R, self.Qf, self.u_bounds, tightened_x_bounds
+            x0, target_traj
         )
         return u_nom_seq, x_nom_seq
