@@ -40,26 +40,59 @@ all_nominal_traj1 = []
 all_nominal_traj2 = []
 
 target1= np.array([0.5,1.0])
-target2= np.array([1.0,0.75])
+target2= np.array([0.75,0.9])
+
+# Collision Avoidance constraints
+r_safe = 0.12
+epsilon = 0.05
+max_retries = 3  # To avoid infinite loop
 
 # Run for 50 steps
 for step in range(50):
-
     theta_desired1 = np.arctan2(target1[1] - x1[1], target1[0] - x1[0])
     theta_desired2 = np.arctan2(target2[1] - x2[1], target2[0] - x2[0])
 
     target_traj1 = np.tile(np.array([target1[0], target1[1], theta_desired1]), (horizon + 1, 1))
     target_traj2 = np.tile(np.array([target2[0], target2[1], theta_desired2]), (horizon + 1, 1))
 
-    u_nom_seq1, x_nom_seq1 = tube_mpc1.plan(x1, target_traj1)
-    u_nom_seq2, x_nom_seq2 = tube_mpc2.plan(x2, target_traj2)
+    for attempt in range(max_retries):
+        u_nom_seq1, x_nom_seq1 = tube_mpc1.plan(x1, target_traj1)
+        u_nom_seq2, x_nom_seq2 = tube_mpc2.plan(x2, target_traj2)
 
-    if u_nom_seq1 is None:
-        print("MPC 1 failed.")
-        break
+        if u_nom_seq1 is None or u_nom_seq2 is None:
+            print("MPC failed.")
+            break
 
-    if u_nom_seq2 is None:
-        print("MPC 2 failed.")
+        for t in range(horizon):
+            # Existing dynamics and constraints for agent1 and agent2...
+
+            # Tube-based collision avoidance constraint:
+            x1_nom_t = x_nom_seq1[:, t]  # Agent 1's nominal state at t
+            x2_nom_t = x_nom_seq2[:, t]  # Agent 2's nominal state at t
+
+            pos1 = x1_nom_t[:2]  # (x, y) position of agent 1
+            pos2 = x2_nom_t[:2]  # (x, y) position of agent 2
+
+            r_safe = 0.1  # safety buffer
+            epsilon = 0.07  # tube disturbance bound margin
+            min_separation = r_safe + epsilon
+
+            distance = np.linalg.norm(pos1 - pos2)
+
+            if distance < min_separation:
+                print(f"[WARNING] Collision risk! Distance = {distance:.3f} < {min_separation}")
+
+                # Example strategy: stop both agents or change their velocity
+                u_nom_seq1 = np.zeros_like(u_nom_seq1)  # stop agent 1
+                u_nom_seq2 = np.zeros_like(u_nom_seq2)  # stop agent 2
+
+                # Or take evasive action
+                # u1 = evasion_strategy(x1, x2, ...)
+            else:
+                # Proceed with computed controls u1 and u2
+                pass
+
+    if u_nom_seq1 is None or u_nom_seq2 is None:
         break
 
     # Apply first control with feedback
@@ -73,44 +106,33 @@ for step in range(50):
     x_error2 = x2 - x_nominal_current2
     u_corr2 = u_nominal_current2 + K2 @ x_error2
 
-    # clip control to original bounds
     u_corr1 = np.clip(u_corr1, tube_mpc1.u_bounds[0], tube_mpc1.u_bounds[1])
     u_corr2 = np.clip(u_corr2, tube_mpc2.u_bounds[0], tube_mpc2.u_bounds[1])
 
     w = np.random.uniform(-0.1, 0.1)
 
-    x1 = model.step(x1, u_corr1+w)
-    trajectory1.append(x1.copy())
-    all_nominal_traj1.append(x_nom_seq1[:, 1])
-
+    x1 = model.step(x1, u_corr1 + w)
     x2 = model.step(x2, u_corr2 + w)
+
+    trajectory1.append(x1.copy())
     trajectory2.append(x2.copy())
+    all_nominal_traj1.append(x_nom_seq1[:, 1])
     all_nominal_traj2.append(x_nom_seq2[:, 1])
 
-    # Log Tube MPC and Nominal MPC paths
-    print("Tube MPC1:",x1,x_nom_seq1[:, 1])
-
-    print(
-        f"Step {step}: ||pos_error|| = {np.linalg.norm(x1[:2] - target1[:2]):.3f}, heading_error = {abs(x1[2] - theta_desired1):.3f}")
-
+    print("Tube MPC1:", x1, x_nom_seq1[:, 1])
+    print(f"Step {step}: ||pos_error|| = {np.linalg.norm(x1[:2] - target1[:2]):.3f}, heading_error = {abs(x1[2] - theta_desired1):.3f}")
     print("Tube MPC2:", x2, x_nom_seq2[:, 1])
+    print(f"Step {step}: ||pos_error|| = {np.linalg.norm(x2[:2] - target2[:2]):.3f}, heading_error = {abs(x2[2] - theta_desired2):.3f}")
 
-    print(
-        f"Step {step}: ||pos_error|| = {np.linalg.norm(x2[:2] - target2[:2]):.3f}, heading_error = {abs(x2[2] - theta_desired2):.3f}")
+    flag1 = np.linalg.norm(x1[:2] - target1[:2]) < 0.02 and abs(x1[2] - theta_desired1) < 0.1
+    flag2 = np.linalg.norm(x2[:2] - target2[:2]) < 0.02 and abs(x2[2] - theta_desired2) < 0.1
 
-    flag1=0
-    flag2=0
-
-    if np.linalg.norm(x1[:2] - target1[:2]) < 0.02 and abs(x1[2] - theta_desired1) < 0.1:
+    if flag1:
         print("Reached target 1.")
-        flag1=1
-
-    if np.linalg.norm(x2[:2] - target2[:2]) < 0.02 and abs(x2[2] - theta_desired2) < 0.1:
+    if flag2:
         print("Reached target 2.")
-        flag2=1
 
-    #If both agents reached their goals end loop
-    if flag1==1 and flag2==1:
+    if flag1 and flag2:
         break
 
 trajectory1 = np.array(trajectory1)
@@ -150,9 +172,9 @@ plt.scatter(*trajectory2[0,:2], c='black', marker='o')
 plt.scatter(*target2, c='black', marker='X', s=50)
 
 plt.grid()
-plt.title("2-Agent Tube MPC with Disturbances")
+plt.title("2-Agent Tube MPC with Disturbances and Collision")
 plt.legend()
-plt.savefig("tube_mpc_multi_vehicle.png")
+plt.savefig("tube_mpc_multi_vehicle_with_collision.png")
 plt.show()
 
 #
