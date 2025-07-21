@@ -12,7 +12,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from env.highway_env.vehicle_models import UnicycleModel
 
-model = UnicycleModel(dt=0.12)
+dt=0.12
+
+model = UnicycleModel(dt)
 
 # MPC parameters
 horizon = 15
@@ -47,6 +49,12 @@ r_safe = 0.12
 epsilon = 0.05
 min_separation = r_safe + epsilon
 max_retries = 3  # To avoid infinite loop
+
+def stl_robustness_tasks(x_nom_seq):
+    y_vals = x_nom_seq[1, :]
+    robustness1 = np.min(y_vals - 0.5)
+    robustness2 = np.max(0.4 - y_vals)
+    return robustness1, robustness2
 
 # Run for 50 steps
 for step in range(50):
@@ -100,22 +108,70 @@ for step in range(50):
         #         # Proceed with computed controls u1 and u2
         #         pass
 
-        # 2. Use Signal Temporal Logic rule
+        # 2. Use Signal Temporal Logic rules
         # Prepare the predicted distances over the horizon
         d_vals = [float(np.linalg.norm(x_nom_seq1[:2, t] - x_nom_seq2[:2, t])) for t in range(horizon)]
 
-        # Check the "always" property manually
-        violations = [d for d in d_vals if d < min_separation]
+        robustness = min(d_vals) - min_separation
+        print(f"[STL Robustness] Margin = {robustness:.4f}")
 
-        if violations:
-            print(f"[Manual STL] Violation detected: smallest distance = {min(d_vals):.3f} < {min_separation:.3f}")
-            # Evasive action: push Agent 2 away from Agent 1
-            evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
-            evade_dir = evade_dir / (np.linalg.norm(evade_dir) + 1e-6)
-            u_nom_seq2[:, :] += 0.3 * np.tile(evade_dir[:, None], (1, u_nom_seq2.shape[1]))
-            print("[EVADE] Agent 2 pushed away from Agent 1")
+        # 2.1 Check the "always" property manually
+        # Violations over full horizon
+        # violations = [d for d in d_vals if d < min_separation]
+        #
+        # if violations:
+        #     print(f"[Manual STL] Violation detected: smallest distance = {min(d_vals):.3f} < {min_separation:.3f}")
+        #     # Evasive action: push Agent 2 away from Agent 1
+        #     evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
+        #     evade_dir = evade_dir / (np.linalg.norm(evade_dir) + 1e-6)
+        #     u_nom_seq2[:, :] += 0.3 * np.tile(evade_dir[:, None], (1, u_nom_seq2.shape[1]))
+        #     print("[EVADE] Agent 2 pushed away from Agent 1")
+        # else:
+        #     print(f"[Manual STL] Satisfied: min distance = {min(d_vals):.3f}")
+
+        # 2.2 Dynamic Task Allocation
+        rob1a, rob1b = stl_robustness_tasks(x_nom_seq1)
+        rob2a, rob2b = stl_robustness_tasks(x_nom_seq2)
+
+        print(f"[Agent 1] Always(y > 0.5): {rob1a:.2f}, Eventually(y < 0.4): {rob1b:.2f}")
+        print(f"[Agent 2] Always(y > 0.5): {rob2a:.2f}, Eventually(y < 0.4): {rob2b:.2f}")
+
+        # Dynamic reassignment if needed
+        if step<30:
+            if rob1a < 0 and rob2a > 0.1:
+                print("[Task Switch] Agent 2 supports Agent 1 by spacing away.")
+                evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
+                evade_dir /= (np.linalg.norm(evade_dir) + 1e-6)
+                u_nom_seq2[:, :] += 0.3 * np.tile(evade_dir[:, None], (1, horizon))
+
+            elif rob2a < 0 and rob1a > 0.1:
+                print("[Task Switch] Agent 1 supports Agent 2 by spacing away.")
+                evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
+                evade_dir /= (np.linalg.norm(evade_dir) + 1e-6)
+                u_nom_seq1[:, :] -= 0.3 * np.tile(evade_dir[:, None], (1, horizon))
+
         else:
-            print(f"[Manual STL] Satisfied: min distance = {min(d_vals):.3f}")
+            if rob1b < 0 and rob2b > 0.1:
+                print("[Task Switch] Agent 2 supports Agent 1 by spacing away.")
+                evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
+                evade_dir /= (np.linalg.norm(evade_dir) + 1e-6)
+                u_nom_seq2[:, :] += 0.3 * np.tile(evade_dir[:, None], (1, horizon))
+
+            elif rob2b < 0 and rob1b > 0.1:
+                print("[Task Switch] Agent 1 supports Agent 2 by spacing away.")
+                evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
+                evade_dir /= (np.linalg.norm(evade_dir) + 1e-6)
+                u_nom_seq1[:, :] -= 0.3 * np.tile(evade_dir[:, None], (1, horizon))
+
+        # Collision check
+        d_vals = [float(np.linalg.norm(x_nom_seq1[:2, t] - x_nom_seq2[:2, t])) for t in range(horizon)]
+        robustness = min(d_vals) - min_separation
+        if robustness < 0:
+            print("[COLLISION WARNING] Adjusting Agent 1 and 2")
+            evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
+            evade_dir /= (np.linalg.norm(evade_dir) + 1e-6)
+            u_nom_seq1[:, :] -= 0.3 * np.tile(evade_dir[:, None], (1, horizon))
+            u_nom_seq2[:, :] += 0.3 * np.tile(evade_dir[:, None], (1, horizon))
 
     if u_nom_seq1 is None or u_nom_seq2 is None:
         break
@@ -197,9 +253,9 @@ plt.scatter(*trajectory2[0,:2], c='black', marker='o')
 plt.scatter(*target2, c='black', marker='X', s=50)
 
 plt.grid()
-plt.title("2-Agent Tube MPC with Disturbances and Collision Avoidance (Signal Temporal Logic)")
+plt.title("2-Agent Tube MPC with Disturbances and Collision Avoidance (STL+Task Allocation:Both)")
 plt.legend()
-plt.savefig("tube_mpc_multi_vehicle_no_collision_stl.png")
+plt.savefig("tube_mpc_stl_dynamic_task_allocation_both.png")
 plt.show()
 
 #
