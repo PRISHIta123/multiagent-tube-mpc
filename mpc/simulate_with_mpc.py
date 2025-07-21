@@ -45,6 +45,7 @@ target2= np.array([0.75,0.9])
 # Collision Avoidance constraints
 r_safe = 0.12
 epsilon = 0.05
+min_separation = r_safe + epsilon
 max_retries = 3  # To avoid infinite loop
 
 # Run for 50 steps
@@ -63,37 +64,58 @@ for step in range(50):
             print("MPC failed.")
             break
 
-        for t in range(horizon):
-            # Existing dynamics and constraints for agent1 and agent2...
+        collision_risk = False
+        distance_log = []
 
-            # Tube-based collision avoidance constraint:
-            x1_nom_t = x_nom_seq1[:, t]  # Agent 1's nominal state at t
-            x2_nom_t = x_nom_seq2[:, t]  # Agent 2's nominal state at t
+        # 1. Use General Collision Avoidance rules
+        # for t in range(horizon):
+        #     # Existing dynamics and constraints for agent1 and agent2...
+        #
+        #     # Tube-based collision avoidance constraint:
+        #     x1_nom_t = x_nom_seq1[:, t]  # Agent 1's nominal state at t
+        #     x2_nom_t = x_nom_seq2[:, t]  # Agent 2's nominal state at t
+        #
+        #     pos1 = x1_nom_t[:2]  # (x, y) position of agent 1
+        #     pos2 = x2_nom_t[:2]  # (x, y) position of agent 2
+        #
+        #     r_safe = 0.1  # safety buffer
+        #     epsilon = 0.07  # tube disturbance bound margin
+        #     min_separation = r_safe + epsilon
+        #
+        #     distance = np.linalg.norm(pos1 - pos2)
+        #
+        #     if distance < min_separation:
+        #         print(f"[WARNING] Collision risk! Distance = {distance:.3f} < {min_separation}")
+        #
+        #         # Example strategy: stop both agents or change their velocity
+        #         # u_nom_seq1 = np.zeros_like(u_nom_seq1)  # stop agent 1
+        #         # u_nom_seq2 = np.zeros_like(u_nom_seq2)  # stop agent 2
+        #
+        #         # Or take evasive action
+        #         # Apply soft repulsion to agent 2 only (assume agent 1 has higher priority)
+        #         evade_dir = (pos2 - pos1) / (distance + 1e-6)
+        #         u_nom_seq2[:2] += 0.3 * evade_dir[:, np.newaxis]
+        #
+        #     else:
+        #         # Proceed with computed controls u1 and u2
+        #         pass
 
-            pos1 = x1_nom_t[:2]  # (x, y) position of agent 1
-            pos2 = x2_nom_t[:2]  # (x, y) position of agent 2
+        # 2. Use Signal Temporal Logic rule
+        # Prepare the predicted distances over the horizon
+        d_vals = [float(np.linalg.norm(x_nom_seq1[:2, t] - x_nom_seq2[:2, t])) for t in range(horizon)]
 
-            r_safe = 0.1  # safety buffer
-            epsilon = 0.07  # tube disturbance bound margin
-            min_separation = r_safe + epsilon
+        # Check the "always" property manually
+        violations = [d for d in d_vals if d < min_separation]
 
-            distance = np.linalg.norm(pos1 - pos2)
-
-            if distance < min_separation:
-                print(f"[WARNING] Collision risk! Distance = {distance:.3f} < {min_separation}")
-
-                # Example strategy: stop both agents or change their velocity
-                # u_nom_seq1 = np.zeros_like(u_nom_seq1)  # stop agent 1
-                # u_nom_seq2 = np.zeros_like(u_nom_seq2)  # stop agent 2
-
-                # Or take evasive action
-                # 1. Apply soft repulsion to agent 2 only (assume agent 1 has higher priority)
-                evade_dir = (pos2 - pos1) / (distance + 1e-6)
-                u_nom_seq2[:2] += 0.3 * evade_dir[:, np.newaxis]
-
-            else:
-                # Proceed with computed controls u1 and u2
-                pass
+        if violations:
+            print(f"[Manual STL] Violation detected: smallest distance = {min(d_vals):.3f} < {min_separation:.3f}")
+            # Evasive action: push Agent 2 away from Agent 1
+            evade_dir = (x_nom_seq2[:2, 0] - x_nom_seq1[:2, 0])
+            evade_dir = evade_dir / (np.linalg.norm(evade_dir) + 1e-6)
+            u_nom_seq2[:, :] += 0.3 * np.tile(evade_dir[:, None], (1, u_nom_seq2.shape[1]))
+            print("[EVADE] Agent 2 pushed away from Agent 1")
+        else:
+            print(f"[Manual STL] Satisfied: min distance = {min(d_vals):.3f}")
 
     if u_nom_seq1 is None or u_nom_seq2 is None:
         break
@@ -175,7 +197,7 @@ plt.scatter(*trajectory2[0,:2], c='black', marker='o')
 plt.scatter(*target2, c='black', marker='X', s=50)
 
 plt.grid()
-plt.title("2-Agent Tube MPC with Disturbances and Collision Avoidance (STL)")
+plt.title("2-Agent Tube MPC with Disturbances and Collision Avoidance (Signal Temporal Logic)")
 plt.legend()
 plt.savefig("tube_mpc_multi_vehicle_no_collision_stl.png")
 plt.show()
