@@ -83,11 +83,14 @@ for step in range(50):
                 print(f"[WARNING] Collision risk! Distance = {distance:.3f} < {min_separation}")
 
                 # Example strategy: stop both agents or change their velocity
-                u_nom_seq1 = np.zeros_like(u_nom_seq1)  # stop agent 1
-                u_nom_seq2 = np.zeros_like(u_nom_seq2)  # stop agent 2
+                # u_nom_seq1 = np.zeros_like(u_nom_seq1)  # stop agent 1
+                # u_nom_seq2 = np.zeros_like(u_nom_seq2)  # stop agent 2
 
                 # Or take evasive action
-                # u1 = evasion_strategy(x1, x2, ...)
+                # 1. Apply soft repulsion to agent 2 only (assume agent 1 has higher priority)
+                evade_dir = (pos2 - pos1) / (distance + 1e-6)
+                u_nom_seq2[:2] += 0.3 * evade_dir[:, np.newaxis]
+
             else:
                 # Proceed with computed controls u1 and u2
                 pass
@@ -172,9 +175,9 @@ plt.scatter(*trajectory2[0,:2], c='black', marker='o')
 plt.scatter(*target2, c='black', marker='X', s=50)
 
 plt.grid()
-plt.title("2-Agent Tube MPC with Disturbances and Collision")
+plt.title("2-Agent Tube MPC with Disturbances and Collision Avoidance (STL)")
 plt.legend()
-plt.savefig("tube_mpc_multi_vehicle_with_collision.png")
+plt.savefig("tube_mpc_multi_vehicle_no_collision_stl.png")
 plt.show()
 
 #
